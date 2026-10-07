@@ -1,0 +1,10 @@
+{
+  "name": "Vinyl Bewertungen",
+  "short_name": "Vinyl",
+  "start_url": "/",
+  "scope": "/",
+  "display": "standalone",
+  "background_color": "#111111",
+  "theme_color": "#111111",
+  "description": "Vinyl-Bewertungen mit lokaler Offline-Speicherung und automatischer Synchronisation."
+}
