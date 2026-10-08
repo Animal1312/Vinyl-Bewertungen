@@ -1,14 +1,12 @@
-﻿<!DOCTYPE html>
+<!DOCTYPE html>
 <html lang="de">
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <meta name="theme-color" content="#111111">
-<link rel="manifest" href="/manifest.webmanifest">
-<meta name="apple-mobile-web-app-capable" content="yes">
-<meta name="apple-mobile-web-app-status-bar-style" content="black">
-<meta name="apple-mobile-web-app-title" content="Vinyl">
 <title>Vinyl Bewertungen</title>
+<link rel="manifest" href="./manifest.webmanifest">
+<link rel="apple-touch-icon" href="./icon.png">
 <style>
 *{box-sizing:border-box}
 body{margin:0;font-family:Arial,Helvetica,sans-serif;background:#f2f2f2;color:#171717}
@@ -86,7 +84,7 @@ th{background:#eee;position:sticky;top:0}
 <div id="coverPlaceholder" class="placeholder">Noch kein Cover ausgewählt</div>
 <img id="coverImage" class="cover" style="display:none" alt="Albumcover">
 <div>
-<p class="small">In dieser ersten Version kannst du ein Cover direkt auswählen. Die automatische Internetsuche wird als nächster Schritt ergänzt.</p>
+<p class="small">Cover auswählen oder automatisch im Internet suchen.</p>
 <input id="coverFile" type="file" accept="image/*">
 <br><br>
 <button class="secondary" onclick="searchCovers()">🔎 Cover automatisch suchen</button>
@@ -122,20 +120,12 @@ th{background:#eee;position:sticky;top:0}
 </section>
 
 <section id="verwaltung" class="page">
-<div class="card">
-<h2>Synchronisation: Computer ↔ iPhone</h2>
-<p>Die Synchronisation läuft automatisch. Über Tailscale funktioniert sie auch außerhalb des heimischen WLANs, solange der Computer eingeschaltet und Tailscale verbunden ist.</p>
-<label>Synchronisationsadresse
-<input id="syncServerUrl" placeholder="z. B. http://192.168.1.20:8765">
-</label>
-<div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:10px">
-<button class="secondary" onclick="setServerUrl()">Adresse speichern</button>
-<button class="primary" onclick="syncNow()">↕ Jetzt synchronisieren</button>
-</div>
-<div id="syncStatus" class="card" style="background:#f5f5f5;margin:12px 0;padding:14px">
-<strong>Status:</strong> <span id="syncStatusText">wird geprüft...</span>
-</div>
-<p class="small">Wenn du die App auf dem Computer bisher direkt als <code>index.html</code> geöffnet hast, trage hier die im blauen Serverfenster angezeigte iPhone-Adresse ein und drücke „Jetzt synchronisieren“. Dadurch werden deine bereits vorhandenen Bewertungen auf den Synchronisationsserver übertragen.</p>
+<div class="card"><h2>Cloud-Synchronisation</h2>
+<p>Mit deinem persönlichen Supabase-Konto anmelden. Ohne Internet werden Bewertungen auf diesem Gerät gespeichert und später synchronisiert.</p>
+<div id="loginBox"><div class="grid"><label>E-Mail<input id="loginEmail" type="email" autocomplete="username" placeholder="Deine E-Mail"></label><label>Passwort<input id="loginPassword" type="password" autocomplete="current-password" placeholder="Dein Passwort"></label></div><button class="primary" style="margin-top:12px" onclick="login()">Anmelden</button></div>
+<p id="authState"></p><button id="logoutBtn" class="secondary" onclick="logout()">Abmelden</button>
+<button class="secondary" onclick="syncNow()">↕ Jetzt synchronisieren</button>
+<div id="syncStatus" class="card" style="background:#f5f5f5;margin:12px 0;padding:14px"><strong>Status:</strong> <span id="syncStatusText">Wird geprüft …</span></div>
 </div>
 <div class="card">
 <h2>Sicherung</h2>
@@ -145,11 +135,7 @@ th{background:#eee;position:sticky;top:0}
 <input type="file" accept=".json,application/json" onchange="importBackup(this)">
 </label>
 </div>
-<div class="card">
-<h2>Verwaltung</h2>
-<p>Hier kannst du alle gespeicherten Bewertungen unwiderruflich löschen.</p>
-<button class="danger" onclick="deleteAll()">Alle Bewertungen löschen</button>
-</div>
+<div class="card"><h2>Datenschutz</h2><p>Die Funktion „Alle Bewertungen löschen“ ist aus Sicherheitsgründen deaktiviert.</p></div>
 </section>
 </main>
 
@@ -175,123 +161,41 @@ function showPage(id, btn){
 }
 
 
-const SYNC_KEY = "vinylRatingsLastSync";
-const SYNC_URL_KEY = "vinylSyncServerUrl";
-let syncBusy = false;
-
-const TAILSCALE_SYNC_URL = "http://100.107.212.14:8765";
-function defaultSyncUrl(){
-  return localStorage.getItem(SYNC_URL_KEY) || TAILSCALE_SYNC_URL;
+const SUPABASE_URL = "https://ozrarpbrrmoqngbzbgvf.supabase.co";
+const SUPABASE_KEY = "sb_publishable_9frEfDqtY3By-Tgb6h22rw_k2DRRYux";
+const DATA_KEY = "vinylRatings_v2";
+const AUTH_KEY = "vinylAuth_v2";
+let syncBusy=false, syncTimer=null;
+function getLocalItems(){try{return JSON.parse(localStorage.getItem(DATA_KEY)||"[]")}catch{return []}}
+function saveLocal(items){localStorage.setItem(DATA_KEY,JSON.stringify(items));renderTable();}
+function setSyncStatus(message,state){
+ const el=document.getElementById("syncStatusText");if(el)el.textContent=message;
+ const g=document.getElementById("globalSyncStatus");if(g){g.textContent=(state==='ok'?'🟢 ':state==='syncing'?'🔵 ':'🟠 ')+message;g.style.color=state==='ok'?'#7CFC98':state==='syncing'?'#8ecae6':'#ffd166';}
 }
-function getSyncUrl(){
-  let v=(document.getElementById("syncServerUrl")?.value || defaultSyncUrl()).trim();
-  return v.replace(/\/+$/,"");
-}
-function setSyncStatus(msg,state){
-  const el=document.getElementById("syncStatusText");
-  if(el) el.textContent=msg;
-  const g=document.getElementById("globalSyncStatus");
-  if(!g) return;
-  if(state==="ok"){
-    g.textContent="🟢 "+msg.replace(/^✓\s*/,"");
-    g.style.color="#7CFC98";
-  }else if(state==="syncing"){
-    g.textContent="🔵 Synchronisation läuft …";
-    g.style.color="#8ecae6";
-  }else{
-    g.textContent="🟠 Offline – Änderungen werden automatisch synchronisiert, sobald der Server erreichbar ist.";
-    g.style.color="#ffd166";
-  }
-}
-function apiAvailable(){ return !!getSyncUrl(); }
-function getLocalItems(){
-  try { return JSON.parse(localStorage.getItem("vinylRatings")||"[]"); }
-  catch(e){ return []; }
-}
-function mergeItems(local, server){
-  const map=new Map();
-  for(const item of (server||[])) map.set(String(item.id), item);
-  for(const item of (local||[])){
-    const key=String(item.id), old=map.get(key);
-    if(!old || Number(item.modifiedAt||0) >= Number(old.modifiedAt||0)) map.set(key,item);
-  }
-  return Array.from(map.values());
-}
-async function syncNow(){
-  if(syncBusy) return;
-  const base=getSyncUrl();
-  if(!base){
-    setSyncStatus("Bitte zuerst die Synchronisationsadresse eingeben (z. B. http://192.168.1.20:8765).");
-    document.getElementById("syncServerUrl")?.focus();
-    return;
-  }
-  localStorage.setItem(SYNC_URL_KEY,base);
-  syncBusy=true;
-  setSyncStatus("Synchronisation läuft …","syncing");
-  try{
-    const local=getLocalItems();
-    const res=await fetch(base+"/api/data?t="+Date.now(),{cache:"no-store"});
-    if(!res.ok) throw new Error("Server antwortet nicht ("+res.status+").");
-    const server=await res.json();
-    const serverItems=Array.isArray(server.items)?server.items:[];
-    const merged=mergeItems(local,serverItems);
-    const payload={items:merged,updatedAt:Date.now()};
-    const save=await fetch(base+"/api/data",{
-      method:"POST",
-      headers:{"Content-Type":"application/json"},
-      body:JSON.stringify(payload)
-    });
-    if(!save.ok) throw new Error("Server konnte Daten nicht speichern ("+save.status+").");
-    const saved=await save.json();
-    localStorage.setItem("vinylRatings",JSON.stringify(merged));
-    localStorage.setItem(SYNC_KEY,String(saved.updatedAt||payload.updatedAt));
-    renderTable();
-    setSyncStatus("✓ Synchronisiert – "+merged.length+" Bewertung"+(merged.length===1?"":"en")+" auf beiden Geräten.","ok");
-  }catch(e){
-    console.error(e);
-    setSyncStatus("✕ Offline – lokale Änderungen bleiben gespeichert.","offline");
-  }finally{ syncBusy=false; }
-}
-function setServerUrl(){
-  const v=(document.getElementById("syncServerUrl")?.value||"").trim().replace(/\/+$/,"");
-  if(v) localStorage.setItem(SYNC_URL_KEY,v);
-  setSyncStatus(v ? "Adresse gespeichert. Jetzt „Synchronisieren“ drücken." : "Bitte eine Adresse eingeben.");
-}
-function exportBackup(){
-  const blob=new Blob([JSON.stringify(getLocalItems(),null,2)],{type:"application/json"});
-  const a=document.createElement("a");
-  a.href=URL.createObjectURL(blob);
-  a.download="vinyl-bewertungen-backup.json";
-  a.click();
-  setTimeout(()=>URL.revokeObjectURL(a.href),1000);
-}
-function importBackup(input){
-  const file=input.files?.[0]; if(!file)return;
-  const reader=new FileReader();
-  reader.onload=()=>{
-    try{
-      const data=JSON.parse(reader.result);
-      if(!Array.isArray(data)) throw new Error("Keine gültige Bewertungsliste.");
-      localStorage.setItem("vinylRatings",JSON.stringify(data));
-      renderTable();
-      setSyncStatus(data.length+" Bewertungen lokal importiert. Jetzt synchronisieren.");
-    }catch(e){ alert("Import fehlgeschlagen: "+e.message); }
-    input.value="";
-  };
-  reader.readAsText(file);
-}
-let syncTimer=null;
-function startSyncPolling(){
-  const field=document.getElementById("syncServerUrl");
-  if(field) field.value=defaultSyncUrl();
-  setSyncStatus("Verbindung wird geprüft …","syncing");
-  syncNow();
-  if(!syncTimer) syncTimer=setInterval(()=>syncNow(),15000);
-}
-window.addEventListener("online",()=>syncNow());
-window.addEventListener("focus",()=>syncNow());
-document.addEventListener("visibilitychange",()=>{if(!document.hidden) syncNow();});
-
+function auth(){try{return JSON.parse(localStorage.getItem(AUTH_KEY)||'null')}catch{return null}}
+function saveAuth(a){if(a)localStorage.setItem(AUTH_KEY,JSON.stringify(a));else localStorage.removeItem(AUTH_KEY);updateAuthUI();}
+function updateAuthUI(){const a=auth();document.getElementById('authState').textContent=a?'Angemeldet – automatische Synchronisation aktiviert.':'Nicht angemeldet – Bewertungen bleiben auf diesem Gerät.';document.getElementById('loginBox').style.display=a?'none':'block';document.getElementById('logoutBtn').style.display=a?'inline-block':'none';}
+async function authRequest(path,body){const r=await fetch(SUPABASE_URL+'/auth/v1/'+path,{method:'POST',headers:{apikey:SUPABASE_KEY,'Content-Type':'application/json'},body:JSON.stringify(body)});const d=await r.json();if(!r.ok)throw Error(d.msg||d.error_description||d.message||'Anmeldung fehlgeschlagen');return d;}
+async function login(){const email=document.getElementById('loginEmail').value.trim(),password=document.getElementById('loginPassword').value;if(!email||!password)return alert('E-Mail und Passwort eingeben.');try{const d=await authRequest('token?grant_type=password',{email,password});saveAuth(d);document.getElementById('loginPassword').value='';await syncNow();}catch(e){alert(e.message)}}
+function logout(){if(!confirm('Abmelden? Die lokalen Bewertungen bleiben auf diesem Gerät.'))return;saveAuth(null);setSyncStatus('Abgemeldet – lokale Speicherung aktiv.','offline');}
+async function accessToken(){let a=auth();if(!a)return null;if(Date.now()<((a.expires_at||0)*1000)-60000)return a.access_token;const d=await authRequest('token?grant_type=refresh_token',{refresh_token:a.refresh_token});saveAuth(d);return d.access_token;}
+async function dbRequest(path,options={}){const token=await accessToken();if(!token)throw Error('Bitte anmelden');const r=await fetch(SUPABASE_URL+'/rest/v1/'+path,{...options,headers:{apikey:SUPABASE_KEY,Authorization:'Bearer '+token,...(options.headers||{})}});if(!r.ok)throw Error('Datenbank: '+r.status+' '+(await r.text()).slice(0,180));if(r.status===204||r.status===205)return null;const body=await r.text();return body?JSON.parse(body):null;}
+function mergeItems(local,server){const m=new Map();for(const i of server)m.set(String(i.id),i);for(const i of local){const old=m.get(String(i.id));if(!old||Number(i.modifiedAt||0)>=Number(old.modifiedAt||0))m.set(String(i.id),i);}return [...m.values()];}
+async function syncNow(){if(syncBusy)return;if(!navigator.onLine){setSyncStatus('Offline – lokal gespeichert; Abgleich bei Internetverbindung.','offline');return;}if(!auth()){setSyncStatus('Lokal gespeichert – zur Synchronisation bitte anmelden.','offline');return;}
+ syncBusy=true;setSyncStatus('Synchronisiere …','syncing');try{
+ const a=auth();const rows=await dbRequest('vinyl_bewertungen?select=id,daten');
+ const merged=mergeItems(getLocalItems(),rows.map(x=>x.daten));
+ // Zuerst lokal sichern, danach fehlende oder geänderte Datensätze übertragen.
+ saveLocal(merged);
+ const remote=new Map(rows.map(x=>[String(x.id),JSON.stringify(x.daten)]));
+ const changed=merged.filter(i=>remote.get(String(i.id))!==JSON.stringify(i));
+ if(changed.length)await dbRequest('vinyl_bewertungen?on_conflict=id',{method:'POST',headers:{'Content-Type':'application/json',Prefer:'resolution=merge-duplicates,return=minimal'},body:JSON.stringify(changed.map(i=>({id:i.id,user_id:a.user.id,daten:i,aktualisiert_am:new Date().toISOString()})))});
+ setSyncStatus('Synchronisiert – '+merged.length+' Bewertungen.','ok');
+ }catch(e){console.error(e);setSyncStatus('Synchronisation ausstehend – lokale Daten bleiben erhalten.','offline');}finally{syncBusy=false;}}
+function exportBackup(){const b=new Blob([JSON.stringify(getLocalItems(),null,2)],{type:'application/json'});const a=document.createElement('a');a.href=URL.createObjectURL(b);a.download='vinyl-bewertungen-v2-sicherung.json';a.click();setTimeout(()=>URL.revokeObjectURL(a.href),1000);}
+function importBackup(input){const f=input.files?.[0];if(!f)return;const reader=new FileReader();reader.onload=()=>{try{const items=JSON.parse(reader.result);if(!Array.isArray(items)||items.some(i=>!i.id||!i.band||!i.album))throw Error('Ungültige Sicherungsdatei');const merged=mergeItems(getLocalItems(),items);if(!confirm(items.length+' Bewertungen gefunden. '+merged.length+' Bewertungen werden insgesamt lokal gespeichert. Fortfahren?'))return;saveLocal(merged);setSyncStatus(merged.length+' Bewertungen importiert – Synchronisation startet.','syncing');syncNow();}catch(e){alert('Import fehlgeschlagen: '+e.message)}finally{input.value=''}};reader.readAsText(f);}
+function startSyncPolling(){updateAuthUI();syncNow();if(!syncTimer)syncTimer=setInterval(syncNow,30000);}
+window.addEventListener('online',syncNow);window.addEventListener('focus',syncNow);document.addEventListener('visibilitychange',()=>{if(!document.hidden)syncNow()});
 function buildRatings(){
  const grid=document.getElementById("ratingGrid");
  grid.innerHTML="";
@@ -321,7 +225,7 @@ function updateTotal(){
 }
 function clearForm(){
  ["year","band","album","genre","release","description"].forEach(id=>document.getElementById(id).value="");
- ratings={}; buildRatings(); updateTotal(); startSyncPolling();
+ ratings={}; buildRatings(); updateTotal();
  coverData=""; document.getElementById("coverFile").value="";
  document.getElementById("coverImage").style.display="none";
  document.getElementById("coverPlaceholder").style.display="flex";
@@ -344,8 +248,8 @@ function saveRating(){
   ratings:{...ratings},description:document.getElementById("description").value,
   total:Object.values(ratings).reduce((a,b)=>a+b,0),cover:coverData,modifiedAt:Date.now()
  };
- const all=JSON.parse(localStorage.getItem("vinylRatings")||"[]");
- all.push(item); localStorage.setItem("vinylRatings",JSON.stringify(all));
+ const all=getLocalItems();
+ all.push(item); saveLocal(all);
  alert("Bewertung gespeichert.");
  clearForm();
  syncNow();
@@ -365,7 +269,7 @@ function getRatingValue(item, categoryName){
 }
 
 function renderTable(){
- const all=JSON.parse(localStorage.getItem("vinylRatings")||"[]").sort((a,b)=>b.total-a.total);
+ const all=getLocalItems().sort((a,b)=>b.total-a.total);
  const box=document.getElementById("tableContainer");
  if(!all.length){box.innerHTML='<div class="empty">Noch keine Bewertungen gespeichert.</div>';return;}
  let html=`<div class="table-wrap"><table><thead><tr>
@@ -445,7 +349,7 @@ function selectCover(i){
 function escapeHtml(s){
  return String(s||"").replace(/[&<>"']/g,m=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#039;"}[m]));
 }
-function deleteAll(){
+function deleteAllDisabled(){
  if(confirm("Wirklich ALLE Bewertungen löschen? Dieser Vorgang kann nicht rückgängig gemacht werden.")){
   localStorage.removeItem("vinylRatings");
   localStorage.setItem(SYNC_KEY,String(Date.now()));
@@ -456,14 +360,9 @@ function deleteAll(){
   alert("Alle Bewertungen wurden gelöscht.");
  }
 }
-if(!localStorage.getItem(SYNC_URL_KEY)) localStorage.setItem(SYNC_URL_KEY,TAILSCALE_SYNC_URL);
-buildRatings(); updateTotal(); startSyncPolling();
 
-if ("serviceWorker" in navigator) {
-  window.addEventListener("load", () => {
-    navigator.serviceWorker.register("/sw.js").catch(err => console.log("Service Worker:", err));
-  });
-}
+buildRatings(); updateTotal(); startSyncPolling();
+if("serviceWorker" in navigator)window.addEventListener("load",()=>navigator.serviceWorker.register("./sw.js").catch(console.warn));
 </script>
 </body>
 </html>
